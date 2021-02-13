@@ -39,8 +39,8 @@ module emu
 	output        CE_PIXEL,
 
 	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	output  [7:0] VIDEO_ARX,
-	output  [7:0] VIDEO_ARY,
+	output [11:0] VIDEO_ARX,
+	output [11:0] VIDEO_ARY,
 
 	output  [7:0] VGA_R,
 	output  [7:0] VGA_G,
@@ -50,7 +50,12 @@ module emu
 	output        VGA_DE,    // = ~(VBlank | HBlank)
 	output        VGA_F1,
 	output [1:0]  VGA_SL,
+	output        VGA_SCALER, // Force VGA scaler
+	
+	input  [11:0] HDMI_WIDTH,
+	input  [11:0] HDMI_HEIGHT,
 
+	`ifdef USE_FB
 	// Use framebuffer from DDRAM (USE_FB=1 in qsf)
 	// FB_FORMAT:
 	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
@@ -58,7 +63,6 @@ module emu
 	//    [4]   : 0=RGB  1=BGR (for 16/24/32 modes)
 	//
 	// FB_STRIDE either 0 (rounded to 256 bytes) or multiple of 16 bytes.
-
 	output        FB_EN,
 	output  [4:0] FB_FORMAT,
 	output [11:0] FB_WIDTH,
@@ -67,6 +71,16 @@ module emu
 	output [13:0] FB_STRIDE,
 	input         FB_VBL,
 	input         FB_LL,
+	output        FB_FORCE_BLANK,
+
+	// Palette control for 8bit modes.
+	// Ignored for other video modes.
+	output        FB_PAL_CLK,
+	output  [7:0] FB_PAL_ADDR,
+	output [23:0] FB_PAL_DOUT,
+	input  [23:0] FB_PAL_DIN,
+	output        FB_PAL_WR,
+	`endif
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
@@ -76,24 +90,27 @@ module emu
 	output  [1:0] LED_POWER,
 	output  [1:0] LED_DISK,
 
-	input         CLK_AUDIO, // 24.576 MHz
+        input         CLK_AUDIO, // 24.576 MHz
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
-	output        AUDIO_S,    // 1 - signed audio samples, 0 - unsigned
+	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
 
-	//High latency DDR3 RAM interface
-	//Use for non-critical time purposes
-	output        DDRAM_CLK,
-	input         DDRAM_BUSY,
-	output  [7:0] DDRAM_BURSTCNT,
-	output [28:0] DDRAM_ADDR,
-	input  [63:0] DDRAM_DOUT,
-	input         DDRAM_DOUT_READY,
-	output        DDRAM_RD,
-	output [63:0] DDRAM_DIN,
-	output  [7:0] DDRAM_BE,
-	output        DDRAM_WE,
+	`ifdef USE_DDRAM
+	  //High latency DDR3 RAM interface
+	  //Use for non-critical time purposes
+	  output        DDRAM_CLK,
+	  input         DDRAM_BUSY,
+	  output  [7:0] DDRAM_BURSTCNT,
+	  output [28:0] DDRAM_ADDR,
+	  input  [63:0] DDRAM_DOUT,
+	  input         DDRAM_DOUT_READY,
+	  output        DDRAM_RD,
+	  output [63:0] DDRAM_DIN,
+	  output  [7:0] DDRAM_BE,
+	  output        DDRAM_WE,
+	`endif
 
+`ifdef USE_SDRAM
 	output        SDRAM_CLK,
 	output        SDRAM_CKE,
 	output [12:0] SDRAM_A,
@@ -105,6 +122,7 @@ module emu
 	output        SDRAM_nCAS,
 	output        SDRAM_nRAS,
 	output        SDRAM_nWE,
+`endif
 
 	// Open-drain User port.
 	// 0 - D+/RX
@@ -117,8 +135,9 @@ module emu
 	output	[7:0] USER_OUT
 );
 
-
 assign VGA_F1    = 0;
+assign VGA_SCALER= 0;
+
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
 wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
@@ -131,15 +150,18 @@ assign       USER_OSD  = joydb_1[10] & joydb_1[6];
 assign LED_USER  = ioctl_download;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
+assign {FB_PAL_CLK, FB_FORCE_BLANK, FB_PAL_ADDR, FB_PAL_DOUT, FB_PAL_WR} = '0;
 
-assign VIDEO_ARX = status[1] ? 8'd16 : (status[2] | landscape) ? 8'd4 : 8'd3;
-assign VIDEO_ARY = status[1] ? 8'd9  : (status[2] | landscape) ? 8'd3 : 8'd4;
+wire [1:0] ar = status[15:14];
 
+assign VIDEO_ARX = (!ar) ? ((status[2] | landscape) ? 8'd4 : 8'd3) : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? ((status[2] | landscape) ? 8'd3 : 8'd4) : 12'd0;
 
 `include "build_id.v" 
 localparam CONF_STR = {
 	"A.IREMM62;;",
-	"H0O1,Aspect Ratio,Original,Wide;",
+	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+
 	"H1H0O2,Orientation,Vert,Horz;",
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
@@ -148,6 +170,7 @@ localparam CONF_STR = {
 	"-;",
 	"DIP;",
 	"-;",
+	"OG,High Score Save,Manual,Off;",
 	"R0,Reset;",
 	"J1,Dig Left,Dig Right,Start 1P,Start 2P,Coin;",
 	"jn,A,B,Start,Select,R;",
@@ -188,7 +211,7 @@ end
 
 ////////////////////   CLOCKS   ///////////////////
 
-wire clk_sys, clk_vid, clk_aud, clk_mem;
+wire clk_sys, clk_vid, clk_aud, clk_mem,clk_3;
 
 wire pll_locked;
 
@@ -212,12 +235,12 @@ wire        direct_video;
 
 wire        ioctl_download_2;
 wire        ioctl_download;
+wire        ioctl_upload;
 wire  [7:0] ioctl_index;
 wire        ioctl_wr;
 wire [24:0] ioctl_addr;
 wire  [7:0] ioctl_dout;
-
-wire [10:0] ps2_key;
+wire  [7:0] ioctl_din;
 
 wire [15:0] joy1 = joy1a;
 wire [15:0] joy2 = joy2a;
@@ -276,16 +299,17 @@ hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 	.gamma_bus(gamma_bus),
 	.direct_video(direct_video),
 
+	.ioctl_upload(ioctl_upload),
 	.ioctl_download(ioctl_download_2),
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
+	.ioctl_din(ioctl_din),
 	.ioctl_index(ioctl_index),
 
 	.joystick_0(joy1a_USB),
 	.joystick_1(joy2a_USB),
 	.joy_raw(joydb_1[5:0] | joydb_2[5:0]),
-	.ps2_key(ps2_key)
 );
 
 assign ioctl_download = ioctl_download_2 & !ioctl_index;
@@ -293,78 +317,25 @@ assign ioctl_download = ioctl_download_2 & !ioctl_index;
 reg [7:0] sw[8];
 always @(posedge clk_sys) if (ioctl_wr && (ioctl_index==254) && !ioctl_addr[24:3]) sw[ioctl_addr[2:0]] <= ioctl_dout;
 
-wire       pressed = ps2_key[9];
-wire [8:0] code    = ps2_key[8:0];
-always @(posedge clk_sys) begin
-	reg old_state;
-	old_state <= ps2_key[10];
-	
-	if(old_state != ps2_key[10]) begin
-		casex(code)
-			'hX75: btn_up          <= pressed; // up
-			'hX72: btn_down        <= pressed; // down
-			'hX6B: btn_left        <= pressed; // left
-			'hX74: btn_right       <= pressed; // right
-			'h029: btn_fireA        <= pressed; // space
-			'h014: btn_fireB        <= pressed; // ctrl
-
-			'h005: btn_start_1     <= pressed; // F1
-			'h006: btn_start_2     <= pressed; // F2
-			'h004: btn_coin        <= pressed; // F3
-
-			// JPAC/IPAC/MAME Style Codes
-			'h016: btn_start_1     <= pressed; // 1
-			'h01E: btn_start_2     <= pressed; // 2
-			'h02E: btn_coin_1      <= pressed; // 5
-			'h036: btn_coin_2      <= pressed; // 6
-			'h02D: btn_up_2        <= pressed; // R
-			'h02B: btn_down_2      <= pressed; // F
-			'h023: btn_left_2      <= pressed; // D
-			'h034: btn_right_2     <= pressed; // G
-			'h01C: btn_fireA_2      <= pressed; // A
-			'h01B: btn_fireB_2      <= pressed; // S
-		endcase
-	end
-end
-
-reg btn_up    = 0;
-reg btn_down  = 0;
-reg btn_right = 0;
-reg btn_left  = 0;
-reg btn_coin  = 0;
-reg btn_fireA  =0;
-reg btn_fireB  = 0;
-
-reg btn_start_1=0;
-reg btn_start_2=0;
-reg btn_coin_1=0;
-reg btn_coin_2=0;
-reg btn_up_2=0;
-reg btn_down_2=0;
-reg btn_left_2=0;
-reg btn_right_2=0;
-reg btn_fireA_2=0;
-reg btn_fireB_2=0;
-
 wire no_rotate = status[2] | direct_video | landscape  ;
-wire m_start    = btn_start_1 | joy1[7] | joy2[7];
-wire m_start_2  = btn_start_2 | joy1[6] | joy2[6];
-wire m_coin_1     = btn_coin    | joy1[8] | btn_coin_1  ;
-wire m_coin_2     =  joy2[8] | btn_coin_2;
+wire m_start    = joy1[6] | joy2[6];
+wire m_start_2  = joy1[7] | joy2[7];
+wire m_coin_1     = joy1[8] ;
+wire m_coin_2     =  joy2[8];
 
-wire m_up     =   btn_up    | joy1[3];
-wire m_down   =   btn_down  | joy1[2];
-wire m_left   =  btn_left  | joy1[1];
-wire m_right  =  btn_right | joy1[0];
-wire m_fireA   = btn_fireA | joy1[4];
-wire m_fireB   = btn_fireB | joy1[5];
+wire m_up     =   joy1[3];
+wire m_down   =   joy1[2];
+wire m_left   =  joy1[1];
+wire m_right  =  joy1[0];
+wire m_fireA   = joy1[4];
+wire m_fireB   = joy1[5];
 
-wire m_up_2     =  btn_up_2    | joy2[3];
-wire m_down_2   =  btn_down_2  | joy2[2];
-wire m_left_2   =  btn_left_2  | joy2[1];
-wire m_right_2  =  btn_right_2 | joy2[0];
-wire m_fireA_2   = btn_fireA_2 | joy2[4];
-wire m_fireB_2   = btn_fireB_2 | joy2[5];
+wire m_up_2     =  joy2[3];
+wire m_down_2   =  joy2[2];
+wire m_left_2   =  joy2[1];
+wire m_right_2  =  joy2[0];
+wire m_fireA_2   = joy2[4];
+wire m_fireB_2   = joy2[5];
 
 wire hblank, vblank;
 wire hs, vs;
@@ -408,7 +379,6 @@ assign AUDIO_S = 1'b0;
 wire [16:0] rom_addr;
 wire [15:0] rom_do;
 
-wire [17:0] snd_addr;
 wire [15:0] snd_rom_addr;
 wire [15:0] snd_do;
 wire        snd_vma;
@@ -455,8 +425,8 @@ sdram sdram(
 
 	.cpu1_addr     ( ioctl_download ? 17'h1ffff : {1'b0, rom_addr[16:1]} ),
 	.cpu1_q        ( rom_do ),
-	.cpu2_addr     ( ioctl_download ? 17'h1ffff : snd_addr[17:1] ),
-	.cpu2_q        ( snd_do ),
+	.cpu2_addr     (  ),
+	.cpu2_q        (  ),
 
 
 	// port2 for sprite graphics
@@ -476,6 +446,27 @@ sdram sdram(
 	.sp_q          ( sp_do     )
 );
 
+wire rom_snd_cs = ioctl_wr && ioctl_download && (ioctl_addr < 'h30000 && ioctl_addr >= 'h20000) && !ioctl_index;
+wire [7:0] snd_do_8;
+dpram #(
+      .init_file(""),
+      .widthad_a(16),
+      .width_a(8),
+      .widthad_b(16),
+      .width_b(8)
+   ) snd_rom (
+	.clock_a(clk_aud), // clk_aud ??
+	.address_a(snd_vma ? snd_rom_addr : snd_rom_addr2[15:0]),
+	.wren_a(1'b0),
+	.q_a(snd_do_8),
+
+	.clock_b(clk_sys),
+	.address_b(ioctl_addr[15:0]),
+	.wren_b(rom_snd_cs),
+	.data_b(ioctl_dout)
+	);
+
+
 // ROM download controller
 always @(posedge clk_sys) begin
 	reg        ioctl_wr_last = 0;
@@ -489,9 +480,6 @@ always @(posedge clk_sys) begin
 		end
 	end
 
-	// async clock domain crossing here (clk_snd -> clk_sys)
-	snd_vma_r <= snd_vma; snd_vma_r2 <= snd_vma_r;
-	if (snd_vma_r2) snd_addr <= snd_rom_addr + 18'h20000;
 end
 
 // reset signal generation
@@ -508,6 +496,12 @@ always @(posedge clk_sys) begin
 	if (ioctl_downloadD & ~ioctl_download) rom_loaded <= 1;
 	reset <= reset_count != 16'h0000;
 
+end
+
+reg [15:0] snd_rom_addr2;
+always @(posedge clk_aud)
+begin
+	if (snd_vma) snd_rom_addr2 <= snd_rom_addr;
 end
 
 wire [11:0] audio;
@@ -554,15 +548,50 @@ target_top target_top(
 	.cpu_rom_addr(rom_addr),
 	.cpu_rom_do( rom_addr[0] ? rom_do[15:8] : rom_do[7:0] ),
 	.snd_rom_addr(snd_rom_addr),
-	.snd_rom_do(snd_rom_addr[0] ? snd_do[15:8] : snd_do[7:0]),
+	.snd_rom_do(snd_do_8),
 	.snd_vma(snd_vma),
 	.gfx1_addr(chr1_addr),
 	.gfx1_do(chr1_do),
 	.gfx3_addr(chr2_addr),
 	.gfx3_do(chr2_do),
 	.gfx2_addr(sp_addr),
-	.gfx2_do(sp_do)
-  );
+	.gfx2_do(sp_do),
 
+	.ram_address(ram_address),
+	.ram_data_hi(ioctl_din),
+	.ram_data_in(hiscore_to_ram),
+	.ram_data_write(hiscore_write)
+
+	);
+
+  
+wire [11:0]ram_address;
+wire [7:0]hiscore_to_ram;
+wire hiscore_write;
+//wire hiscore_pause;
+
+//assign pause = hiscore_pause || pause_toggle;
+
+hiscore #(12) hi (
+   .clk(clk_sys),
+   .reset(reset),
+   .mode(status[16]),
+	.delay(1'b0),
+   .ioctl_upload(ioctl_upload),
+   .ioctl_download(ioctl_download),
+   .ioctl_wr(ioctl_wr),
+   .ioctl_addr(ioctl_addr),
+   .ioctl_dout(ioctl_dout),
+   .ioctl_din(ioctl_din),
+   .ioctl_index(ioctl_index),
+   .ram_address(ram_address),
+   .data_to_ram(hiscore_to_ram),
+   .ram_write(hiscore_write),
+//   .pause(hiscore_pause)
+);
+
+  
+  
+  
 endmodule
 
