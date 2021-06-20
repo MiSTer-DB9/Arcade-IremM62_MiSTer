@@ -71,12 +71,14 @@ entity platform is
     gfx3_addr       : out std_logic_vector(17 downto 2);
     gfx3_do         : in std_logic_vector(31 downto 0);
 
-		-- high score
-		ram_address: in  std_logic_vector(11 downto 0);
-		ram_data_hi   : out std_logic_vector(7 downto 0);
-		ram_data_in: in  std_logic_vector(7 downto 0);
-		ram_data_write:  in std_logic
-	 );
+	 pause				: in std_logic;
+	 
+    -- high score
+    hs_address       : in  std_logic_vector(11 downto 0);
+    hs_data_out      : out std_logic_vector(7 downto 0);    
+    hs_data_in       : in  std_logic_vector(7 downto 0);
+    hs_write         : in  std_logic
+);
 
 end platform;
 
@@ -153,7 +155,7 @@ architecture SYN of platform is
 
   -- other signals
   signal rst_platform   : std_logic;
-  signal pause          : std_logic;
+--  signal pause          : std_logic;
   signal rot_en         : std_logic;
 
   -- Lode Runner 2,4
@@ -183,15 +185,15 @@ begin
   begin
     if rst_sys = '1' then
       rst_platform <= '0';
-      pause <= '0';
+--      pause <= '0';
       rot_en <= '0';  -- to default later
       spec_keys_r := (others => '0');
       layer_en := "11111";
     elsif rising_edge(clk_sys) then
       rst_platform <= spec_keys(0);
-      if spec_keys_r(1) = '0' and spec_keys(1) = '1' then
-        pause <= not pause;
-      end if;
+--      if spec_keys_r(1) = '0' and spec_keys(1) = '1' then
+--        pause <= not pause;
+--      end if;
       if spec_keys_r(2) = '0' and spec_keys(2) = '1' then
         rot_en <= not rot_en;
         if layer_en = "11111" then
@@ -233,7 +235,7 @@ begin
                           STD_MATCH(cpu_a, X"A"&"-----------0") else
                 '1' when (hwsel = HW_SPELUNKR or hwsel = HW_SPELUNK2) and
                           STD_MATCH(cpu_a,  "101------------0") else
-                '1' when hwsel /= HW_KUNGFUM and hwsel /= HW_KIDNIKI and
+                '1' when hwsel /= HW_KUNGFUM and hwsel /= HW_KIDNIKI and hwsel /= HW_SPELUNKR and hwsel /= HW_SPELUNK2 and
                           STD_MATCH(cpu_a, X"D"&"-----------0") else
                 '0';
   cram_cs <=    '1' when hwsel = HW_KUNGFUM and
@@ -242,7 +244,7 @@ begin
                           STD_MATCH(cpu_a, X"A"&"-----------1") else
                 '1' when (hwsel = HW_SPELUNKR or hwsel = HW_SPELUNK2) and
                           STD_MATCH(cpu_a,  "101------------1") else
-                '1' when hwsel /= HW_KUNGFUM and hwsel /= HW_KIDNIKI and
+                '1' when hwsel /= HW_KUNGFUM and hwsel /= HW_KIDNIKI and hwsel /= HW_SPELUNKR and hwsel /= HW_SPELUNK2 and
                           STD_MATCH(cpu_a, X"D"&"-----------1") else
                 '0';
 
@@ -558,6 +560,7 @@ begin
     graphics_o.bit16(0) <= scrollram_d_o when hwsel = HW_HORIZON else m62_hscroll;
     graphics_o.bit16(1) <= m62_vscroll;
     graphics_o.bit16(2) <= m62_vscroll2;
+    graphics_o.bit16(3)(0) <= m62_topbottom_mask;
   end block BLK_SCROLL;
 
 
@@ -698,10 +701,10 @@ begin
         q_a         => wram_d_o,
 		  
         clock_b     => clk_sys,
-        address_b   => ram_address,
-        wren_b      => ram_data_write,
-        data_b      => ram_data_in,
-        q_b         => ram_data_hi
+        address_b   => hs_address,
+        wren_b      => hs_write,
+        data_b      => hs_data_in,
+        q_b         => hs_data_out
 
       );
   -- tilemap 1 palette address
@@ -965,26 +968,15 @@ begin
   -- JP1-4 - Tiles with color code >= the value set here have priority over sprites
   -- J1: selects whether bit 4 of obj color code selects or not high priority over tiles
 
-  process(hwsel, tilemap_i(1).pal_a, sprite_i.pal_a)
-    variable bg_trans: std_logic;
+  process(hwsel, tilemap_i(1).prio, sprite_i.pal_a)
   begin
-    sprite_pri <= '1';
-    bg_trans := '0';
-    if tilemap_i(1).pal_a(2 downto 0) = "000" then
-      bg_trans := '1';
+
+    sprite_pri <= not tilemap_i(1).prio;
+
+    if (hwsel = HW_LDRUN or hwsel = HW_LDRUN2 or hwsel = HW_LDRUN3 or hwsel = HW_BATTROAD) then
+      sprite_pri <= sprite_i.pal_a(7) or not tilemap_i(1).prio;
     end if;
-    if (hwsel = HW_YOUJYUDN or hwsel = HW_HORIZON) and tilemap_i(1).pal_a(7 downto 4) >= x"8" then
-      sprite_pri <= bg_trans;
-    end if;
-    if hwsel = HW_LDRUN and tilemap_i(1).pal_a(7 downto 4) >= x"c" then
-      sprite_pri <= sprite_i.pal_a(7) or bg_trans;
-    end if;
-    if (hwsel = HW_LDRUN2 or hwsel = HW_LDRUN3 or hwsel = HW_BATTROAD) and tilemap_i(1).pal_a(7 downto 4) >= x"4" then
-      sprite_pri <= sprite_i.pal_a(7) or bg_trans;
-    end if;
-    if hwsel = HW_KIDNIKI and tilemap_i(1).tile_a(13 downto 11) = "111" then
-      sprite_pri <= bg_trans;
-    end if;
+
   end process;
 
   -- unused outputs
