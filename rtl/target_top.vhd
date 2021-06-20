@@ -47,6 +47,9 @@ entity target_top is port(
 		VGA_G           : out std_logic_vector(3 downto 0);
 		VGA_B           : out std_logic_vector(3 downto 0);
 
+		hs_offset       : in std_logic_vector(3 downto 0);
+		vs_offset       : in std_logic_vector(3 downto 0);
+
 		dl_addr         : in std_logic_vector(11 downto 0);
 		dl_data         : in std_logic_vector(7 downto 0);
 		dl_wr           : in std_logic;
@@ -63,12 +66,13 @@ entity target_top is port(
 		gfx3_addr       : out std_logic_vector(17 downto 2);
 		gfx3_do         : in std_logic_vector(31 downto 0);
 
+		pause            : in std_logic;
 
 		-- high score
-		ram_address: in  std_logic_vector(11 downto 0);
-		ram_data_hi   : out std_logic_vector(7 downto 0);
-		ram_data_in: in  std_logic_vector(7 downto 0);
-		ram_data_write:  in std_logic
+		hs_address       : in std_logic_vector(11 downto 0);
+		hs_data_out      : out std_logic_vector(7 downto 0);
+		hs_data_in       : in std_logic_vector(7 downto 0);
+		hs_write         : in std_logic
 
 	);
 end target_top;
@@ -137,6 +141,8 @@ end generate GEN_RESETS;
 -- video_i.clk_ena <= '1';
  video_i.clk_ena <= '1' when count = "00" else '0';
  video_i.reset <= clkrst_i.rst(1);
+ video_i.hs_offset <= hs_offset;
+ video_i.vs_offset <= vs_offset;
  VGA_R <= video_o.rgb.r(9 downto 6);
  VGA_G <= video_o.rgb.g(9 downto 6);
  VGA_B <= video_o.rgb.b(9 downto 6);
@@ -187,10 +193,12 @@ pace_inst : entity work.pace
 		gfx3_addr         => gfx3_addr,
 		gfx3_do           => gfx3_do,
 		
-		ram_address       =>  ram_address,
-		ram_data_hi       =>  ram_data_hi,
-		ram_data_in       =>  ram_data_in,
-		ram_data_write    =>  ram_data_write
+		pause             => pause,
+		
+		hs_address        => hs_address,
+		hs_data_out       => hs_data_out,
+		hs_data_in        => hs_data_in,
+		hs_write          => hs_write
 		
 		
     );
